@@ -86,6 +86,7 @@ private[spark] class BasicExecutorFeatureStep(
       execResources.cores.get.toString
     }
   private val executorLimitCores = kubernetesConf.get(KUBERNETES_EXECUTOR_LIMIT_CORES)
+  private val executorLimitMemory = kubernetesConf.get(KUBERNETES_EXECUTOR_LIMIT_MEMORY)
 
   private def buildExecutorResourcesQuantities(
       customResources: Set[ExecutorResourceRequest]): Map[String, Quantity] = {
@@ -237,13 +238,25 @@ private[spark] class BasicExecutorFeatureStep(
     } else {
       executorContainerWithConfVolume
     }
+    val containerWithLimitMemory = if (kubernetesConf.sparkConf.contains(KUBERNETES_EXECUTOR_LIMIT_MEMORY)) {
+      executorLimitMemory.map { limitMemory =>
+        val executorMemoryLimitQuantity = new Quantity(limitMemory)
+        new ContainerBuilder(containerWithLimitCores)
+          .editResources()
+          .addToLimits("memory", executorMemoryLimitQuantity)
+          .endResources()
+          .build()
+      }.getOrElse(containerWithLimitCores)
+    } else {
+      containerWithLimitCores
+    }
     val containerWithLifecycle =
       if (!kubernetesConf.workerDecommissioning) {
         logInfo("Decommissioning not enabled, skipping shutdown script")
-        containerWithLimitCores
+        containerWithLimitMemory
       } else {
         logInfo("Adding decommission script to lifecycle")
-        new ContainerBuilder(containerWithLimitCores).withNewLifecycle()
+        new ContainerBuilder(containerWithLimitMemory).withNewLifecycle()
           .withNewPreStop()
             .withNewExec()
               .addToCommand(kubernetesConf.get(DECOMMISSION_SCRIPT))
